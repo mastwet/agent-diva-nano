@@ -45,7 +45,7 @@ pub fn build_provider(
     ))
 }
 
-/// Build `ToolConfig` from `NanoConfig`.
+/// Build `ToolConfig` from `NanoConfig` (for Standard mode).
 pub fn build_tool_config(config: &NanoConfig) -> ToolConfig {
     let network = if let Some(ref search) = config.web_search {
         NetworkToolConfig {
@@ -81,4 +81,13 @@ pub fn build_tool_config(config: &NanoConfig) -> ToolConfig {
             boundary_confirmation_hint: config.soul.boundary_confirmation_hint,
         },
     }
+}
+
+/// Build `ToolConfig` from ToolAssembly (placeholder for future use).
+/// Note: In Nano mode, ToolAssembly directly builds a ToolRegistry,
+/// so this function is primarily for potential future Standard mode integration.
+pub fn build_tool_config_from_assembly(
+    _assembly: &crate::tool_assembly::ToolAssembly,
+) -> ToolConfig {
+    ToolConfig::default()
 }

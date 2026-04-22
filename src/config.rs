@@ -4,6 +4,9 @@ use std::path::PathBuf;
 /// Re-export MCP server configuration from the core crate.
 pub use agent_diva_core::config::MCPServerConfig;
 
+/// Re-export tool assembly types.
+pub use crate::tool_assembly::{BuiltInToolsConfig, ShellToolConfig, WebToolConfig};
+
 /// Simplified web search configuration.
 #[derive(Debug, Clone)]
 pub struct WebSearchConfig {
@@ -66,7 +69,7 @@ impl Default for SoulConfig {
 /// use std::path::PathBuf;
 ///
 /// let config = NanoConfig {
-///     model: "deepseek-chat".to_string(),
+///     model: "deepseek-chat"to_string(),
 ///     api_key: std::env::var("API_KEY").unwrap(),
 ///     ..Default::default()
 /// };
@@ -93,6 +96,9 @@ pub struct NanoConfig {
     pub mcp_servers: HashMap<String, MCPServerConfig>,
     /// Soul / identity context configuration.
     pub soul: SoulConfig,
+    /// Built-in tools enable/disable configuration.
+    /// If not set, defaults to BuiltInToolsConfig::default().
+    pub builtin_tools: Option<BuiltInToolsConfig>,
 }
 
 impl Default for NanoConfig {
@@ -108,6 +114,7 @@ impl Default for NanoConfig {
             web_search: None,
             mcp_servers: HashMap::new(),
             soul: SoulConfig::default(),
+            builtin_tools: None, // Uses BuiltInToolsConfig::default() when not set
         }
     }
 }
