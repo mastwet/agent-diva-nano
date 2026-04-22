@@ -1,6 +1,6 @@
 [package]
 name = "agent-diva-nano"
-version = "0.4.9"
+version = "0.4.10"
 edition = "2021"
 authors = ["mastwet (projectViVY Team, undefine foundation)"]
 license = "MIT"
@@ -9,7 +9,8 @@ description = "Minimal 'create an agent' library for Agent Diva"
 rust-version = "1.80.0"
 
 [features]
-default = []
+default = ["files"]
+files = ["agent-diva-files"]
 
 [dependencies]
 tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time"] }
@@ -26,7 +27,7 @@ agent-diva-core = "0.4.9"
 agent-diva-agent = "0.4.9"
 agent-diva-providers = "0.4.9"
 agent-diva-tools = "0.4.9"
-agent-diva-files = "0.4.9"
+agent-diva-files = { version = "0.4.9", optional = true }
 
 [dev-dependencies]
 tempfile = "3.10"

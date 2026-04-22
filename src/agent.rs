@@ -7,6 +7,7 @@ use crate::internal::context::NanoSoulSettings;
 use crate::internal::provider::{build_provider, build_tool_config};
 use agent_diva_agent::AgentLoop;
 use agent_diva_core::bus::{AgentEvent, InboundMessage, MessageBus};
+#[cfg(feature = "files")]
 use agent_diva_files::{FileManager, FileConfig};
 use agent_diva_providers::DynamicProvider;
 use agent_diva_tools::{Tool, ToolRegistry};
@@ -44,6 +45,7 @@ pub struct Agent {
     workspace: PathBuf,
     model: String,
     max_iterations: usize,
+    #[cfg(feature = "files")]
     file_manager: Arc<FileManager>,
     runtime_control_tx: Option<mpsc::UnboundedSender<NanoRuntimeControlCommand>>,
     agent_handle: Option<JoinHandle<()>>,
@@ -82,6 +84,7 @@ impl Agent {
         let model = self.model.clone();
         let workspace = self.workspace.clone();
         let max_iterations = self.max_iterations;
+        #[cfg(feature = "files")]
         let file_manager = self.file_manager.clone();
 
         let (runtime_control_tx, runtime_control_rx) = mpsc::unbounded_channel();
@@ -107,25 +110,33 @@ impl Agent {
                 // need to be passed via ToolConfig extension or a different approach.
                 // For now, we use the standard path with tool_config.
                 
-                let mut agent_loop = AgentLoop::with_tools(
-                    bus.clone(),
-                    provider,
-                    workspace,
-                    Some(model),
-                    Some(max_iterations),
-                    tool_config,
-                    None, // No runtime control for standard mode (different type)
-                    file_manager,
-                ).await.map_err(|e| NanoError::Other(e.to_string()))?;
+                #[cfg(not(feature = "files"))]
+                {
+                    return Err(NanoError::Other("Standard mode requires 'files' feature. Use Nano mode or enable 'files' feature.".to_string()));
+                }
+                
+                #[cfg(feature = "files")]
+                {
+                    let mut agent_loop = AgentLoop::with_tools(
+                        bus.clone(),
+                        provider,
+                        workspace,
+                        Some(model),
+                        Some(max_iterations),
+                        tool_config,
+                        None, // No runtime control for standard mode (different type)
+                        file_manager,
+                    ).await.map_err(|e| NanoError::Other(e.to_string()))?;
 
-                let agent_handle = tokio::spawn(async move {
-                    info!("Agent loop (standard) starting");
-                    if let Err(e) = agent_loop.run().await {
-                        error!("Agent loop error: {}", e);
-                    }
-                    info!("Agent loop (standard) stopped");
-                });
-                self.agent_handle = Some(agent_handle);
+                    let agent_handle = tokio::spawn(async move {
+                        info!("Agent loop (standard) starting");
+                        if let Err(e) = agent_loop.run().await {
+                            error!("Agent loop error: {}", e);
+                        }
+                        info!("Agent loop (standard) stopped");
+                    });
+                    self.agent_handle = Some(agent_handle);
+                }
             }
             AgentLoopMode::Nano => {
                 // Use nano's lightweight NanoAgentLoop with ToolAssembly
@@ -151,6 +162,7 @@ impl Agent {
                     Some(model),
                     nano_config,
                     tool_registry,
+                    #[cfg(feature = "files")]
                     file_manager,
                 ).await.map_err(|e| NanoError::Other(e.to_string()))?;
 
@@ -412,10 +424,13 @@ impl AgentBuilder {
         let model = config.model.clone();
         let max_iterations = config.max_iterations;
 
-        // Initialize file manager
-        let storage_path = workspace.join(".agent-diva/files");
-        let file_config = FileConfig::with_path(&storage_path);
-        let file_manager = Arc::new(FileManager::new(file_config).await.map_err(|e| NanoError::Other(e.to_string()))?);
+        // Initialize file manager (only with files feature)
+        #[cfg(feature = "files")]
+        let file_manager = {
+            let storage_path = workspace.join(".agent-diva/files");
+            let file_config = FileConfig::with_path(&storage_path);
+            Arc::new(FileManager::new(file_config).await.map_err(|e| NanoError::Other(e.to_string()))?)
+        };
 
         match self.mode {
             AgentLoopMode::Standard => {
@@ -438,6 +453,7 @@ impl AgentBuilder {
                     workspace,
                     model,
                     max_iterations,
+                    #[cfg(feature = "files")]
                     file_manager,
                     runtime_control_tx: None,
                     agent_handle: None,
@@ -498,6 +514,7 @@ impl AgentBuilder {
                     workspace,
                     model,
                     max_iterations,
+                    #[cfg(feature = "files")]
                     file_manager,
                     runtime_control_tx: None,
                     agent_handle: None,

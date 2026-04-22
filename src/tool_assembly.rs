@@ -7,6 +7,7 @@
 use agent_diva_tools::{Tool, ToolRegistry};
 use agent_diva_core::security::{SecurityConfig, SecurityPolicy};
 use agent_diva_core::cron::CronService;
+#[cfg(feature = "files")]
 use agent_diva_files::FileManager;
 use std::sync::Arc;
 use std::path::PathBuf;
@@ -144,6 +145,7 @@ pub struct ToolAssembly {
     mcp_servers: std::collections::HashMap<String, agent_diva_core::config::MCPServerConfig>,
     cron_service: Option<Arc<CronService>>,
     subagent_spawner: Option<Arc<dyn SubagentSpawner>>,
+    #[cfg(feature = "files")]
     file_manager: Option<Arc<FileManager>>,
 }
 
@@ -174,11 +176,13 @@ impl ToolAssembly {
             mcp_servers: std::collections::HashMap::new(),
             cron_service: None,
             subagent_spawner: None,
+            #[cfg(feature = "files")]
             file_manager: None,
         }
     }
 
     /// Provide a file manager for attachment handling.
+    #[cfg(feature = "files")]
     pub fn with_file_manager(mut self, manager: Arc<FileManager>) -> Self {
         self.file_manager = Some(manager);
         self
@@ -366,6 +370,7 @@ impl ToolAssembly {
         }
 
         // Register attachment tool
+        #[cfg(feature = "files")]
         if self.builtin_config.attachment {
             // Attachment tool requires FileManager - skip if not provided
             // FileManager creation is async, so we can't create it here
@@ -463,11 +468,12 @@ mod tests {
         let registry = ToolAssembly::new(PathBuf::from("/tmp/test"))
             .build();
         
-        // Default has most tools enabled (except cron which requires service)
+        // Default has most tools enabled (except cron which requires service, and spawn which requires spawner)
         assert!(registry.has("read_file"));
         assert!(registry.has("exec"));
         assert!(registry.has("web_search"));
-        assert!(registry.has("spawn"));
+        // spawn requires a custom spawner, so it won't be registered by default
+        assert!(!registry.has("spawn"));
         assert!(!registry.has("cron")); // cron requires explicit service
     }
 

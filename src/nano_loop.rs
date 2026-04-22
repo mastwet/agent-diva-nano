@@ -6,6 +6,7 @@
 use agent_diva_core::bus::{AgentEvent, InboundMessage, MessageBus, OutboundMessage};
 use agent_diva_core::error_context::ErrorContext;
 use agent_diva_core::session::SessionManager;
+#[cfg(feature = "files")]
 use agent_diva_files::FileManager;
 use agent_diva_providers::{LLMProvider, LLMStreamEvent, ProviderEventStream, ToolCallRequest};
 use agent_diva_tools::ToolRegistry;
@@ -52,6 +53,7 @@ pub struct NanoAgentLoop {
     sessions: SessionManager,
     tools: ToolRegistry,
     context: NanoContextBuilder,
+    #[cfg(feature = "files")]
     file_manager: Arc<FileManager>,
     cancelled_sessions: HashSet<String>,
     runtime_control_rx: Option<mpsc::UnboundedReceiver<NanoRuntimeControlCommand>>,
@@ -76,7 +78,7 @@ impl NanoAgentLoop {
         model: Option<String>,
         config: NanoLoopConfig,
         tools: ToolRegistry,
-        file_manager: Arc<FileManager>,
+        #[cfg(feature = "files")] file_manager: Arc<FileManager>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let model = model.unwrap_or_else(|| provider.get_default_model());
         let context = NanoContextBuilder::new(workspace.clone())
@@ -92,6 +94,7 @@ impl NanoAgentLoop {
             sessions,
             tools,
             context,
+            #[cfg(feature = "files")]
             file_manager,
             cancelled_sessions: HashSet::new(),
             runtime_control_rx: None,
@@ -118,6 +121,7 @@ impl NanoAgentLoop {
     }
 
     /// Get the file manager.
+    #[cfg(feature = "files")]
     pub fn file_manager(&self) -> Arc<FileManager> {
         self.file_manager.clone()
     }
@@ -477,7 +481,7 @@ impl NanoAgentLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_diva_providers::{LLMResponse, Message, ProviderError, ProviderResult};
+    use agent_diva_providers::{LLMResponse, Message, ProviderResult, LLMStreamEvent};
     use async_trait::async_trait;
     use futures::stream;
 
@@ -494,9 +498,11 @@ mod tests {
             _temperature: f64,
         ) -> ProviderResult<LLMResponse> {
             Ok(LLMResponse {
-                content: "mock response".to_string(),
+                content: Some("mock response".to_string()),
                 reasoning_content: None,
                 tool_calls: Vec::new(),
+                finish_reason: "stop".to_string(),
+                usage: std::collections::HashMap::new(),
             })
         }
 
@@ -509,8 +515,14 @@ mod tests {
             _temperature: f64,
         ) -> ProviderResult<ProviderEventStream> {
             Ok(Box::pin(stream::iter(vec![
-                Ok(ProviderEvent::TextDelta { delta: "mock".to_string() }),
-                Ok(ProviderEvent::Done),
+                Ok(LLMStreamEvent::TextDelta("mock".to_string())),
+                Ok(LLMStreamEvent::Completed(LLMResponse {
+                    content: Some("mock".to_string()),
+                    reasoning_content: None,
+                    tool_calls: Vec::new(),
+                    finish_reason: "stop".to_string(),
+                    usage: std::collections::HashMap::new(),
+                })),
             ])))
         }
 
@@ -525,22 +537,42 @@ mod tests {
         let provider = Arc::new(MockProvider);
         let workspace = PathBuf::from("/tmp/test");
         let tools = ToolRegistry::new();
-        let storage_path = workspace.join(".agent-diva/files");
-        let file_config = agent_diva_files::FileConfig::with_path(&storage_path);
-        let file_manager = Arc::new(FileManager::new(file_config).await.unwrap());
+        
+        #[cfg(feature = "files")]
+        {
+            let storage_path = workspace.join(".agent-diva/files");
+            let file_config = agent_diva_files::FileConfig::with_path(&storage_path);
+            let file_manager = Arc::new(FileManager::new(file_config).await.unwrap());
 
-        let agent = NanoAgentLoop::new(
-            bus,
-            provider,
-            workspace,
-            None,
-            NanoLoopConfig::default(),
-            tools,
-            file_manager,
-        ).await;
+            let agent = NanoAgentLoop::new(
+                bus,
+                provider,
+                workspace,
+                None,
+                NanoLoopConfig::default(),
+                tools,
+                file_manager,
+            ).await;
 
-        assert!(agent.is_ok());
-        let agent = agent.unwrap();
-        assert_eq!(agent.config.max_iterations, 20);
+            assert!(agent.is_ok());
+            let agent = agent.unwrap();
+            assert_eq!(agent.config.max_iterations, 20);
+        }
+        
+        #[cfg(not(feature = "files"))]
+        {
+            let agent = NanoAgentLoop::new(
+                bus,
+                provider,
+                workspace,
+                None,
+                NanoLoopConfig::default(),
+                tools,
+            ).await;
+
+            assert!(agent.is_ok());
+            let agent = agent.unwrap();
+            assert_eq!(agent.config.max_iterations, 20);
+        }
     }
 }

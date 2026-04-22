@@ -97,3 +97,7 @@ pub use agent_diva_core::bus::AgentEvent;
 
 /// Re-export provider registry so consumers can resolve provider names from model identifiers.
 pub use agent_diva_providers::ProviderRegistry;
+
+/// Re-export FileManager when files feature is enabled.
+#[cfg(feature = "files")]
+pub use agent_diva_files::FileManager;
