@@ -41,7 +41,7 @@
 //!     ..Default::default()
 //! };
 //!
-//! let mut agent = Agent::new(config).build()?;
+//! let mut agent = Agent::new(config).build().await?;
 //! agent.start().await?;
 //!
 //! let r1 = agent.send("Hello").await?;

@@ -1,6 +1,6 @@
 [package]
 name = "agent-diva-nano"
-version = "0.3.0"
+version = "0.4.9"
 edition = "2021"
 authors = ["mastwet (projectViVY Team, undefine foundation)"]
 license = "MIT"
@@ -19,10 +19,11 @@ serde_json = "1.0"
 tracing = "0.1"
 
 # Agent Diva internal crates
-agent-diva-core = "0.3.0"
-agent-diva-agent = "0.3.0"
-agent-diva-providers = "0.3.0"
-agent-diva-tools = "0.3.0"
+agent-diva-core = "0.4.9"
+agent-diva-agent = "0.4.9"
+agent-diva-providers = "0.4.9"
+agent-diva-tools = "0.4.9"
+agent-diva-files = "0.4.9"
 
 [dev-dependencies]
 tempfile = "3.10"

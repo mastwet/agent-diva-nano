@@ -2,6 +2,7 @@ use crate::{NanoConfig, NanoError};
 use crate::internal::provider::{build_provider, build_tool_config};
 use agent_diva_agent::AgentLoop;
 use agent_diva_core::bus::{AgentEvent, InboundMessage, MessageBus};
+use agent_diva_files::{FileManager, FileConfig};
 use agent_diva_providers::DynamicProvider;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ pub struct Agent {
     workspace: PathBuf,
     model: String,
     max_iterations: usize,
+    file_manager: Arc<FileManager>,
     runtime_control_tx: Option<mpsc::UnboundedSender<agent_diva_agent::RuntimeControlCommand>>,
     agent_handle: Option<JoinHandle<()>>,
     outbound_handle: Option<JoinHandle<()>>,
@@ -52,6 +54,7 @@ impl Agent {
         let workspace = self.workspace.clone();
         let tool_config = self.tool_config.clone();
         let max_iterations = self.max_iterations;
+        let file_manager = self.file_manager.clone();
 
         let (runtime_control_tx, runtime_control_rx) = mpsc::unbounded_channel();
         self.runtime_control_tx = Some(runtime_control_tx);
@@ -64,7 +67,8 @@ impl Agent {
             Some(max_iterations),
             tool_config,
             Some(runtime_control_rx),
-        );
+            file_manager,
+        ).await.map_err(|e| NanoError::Other(e.to_string()))?;
 
         let agent_handle = tokio::spawn(async move {
             info!("Agent loop starting");
@@ -232,7 +236,7 @@ impl AgentBuilder {
     }
 
     /// Build the [`Agent`].
-    pub fn build(self) -> Result<Agent, NanoError> {
+    pub async fn build(self) -> Result<Agent, NanoError> {
         let config = self.config;
         if config.model.is_empty() {
             return Err(NanoError::Other("model must be set".to_string()));
@@ -250,6 +254,11 @@ impl AgentBuilder {
         let model = config.model.clone();
         let max_iterations = config.max_iterations;
 
+        // Initialize file manager for attachment handling
+        let storage_path = workspace.join(".agent-diva/files");
+        let file_config = FileConfig::with_path(&storage_path);
+        let file_manager = Arc::new(FileManager::new(file_config).await.map_err(|e| NanoError::Other(e.to_string()))?);
+
         Ok(Agent {
             bus,
             provider,
@@ -257,6 +266,7 @@ impl AgentBuilder {
             workspace,
             model,
             max_iterations,
+            file_manager,
             runtime_control_tx: None,
             agent_handle: None,
             outbound_handle: None,

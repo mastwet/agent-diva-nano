@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 /// # }
 /// ```
 pub async fn chat(message: impl Into<String>, config: &NanoConfig) -> Result<String, NanoError> {
-    let mut agent = Agent::new(config.clone()).build()?;
+    let mut agent = Agent::new(config.clone()).build().await?;
     agent.start().await?;
     let response = agent.send(message).await;
     agent.stop().await;
@@ -56,7 +56,7 @@ pub async fn chat_stream(
     message: impl Into<String>,
     config: &NanoConfig,
 ) -> Result<mpsc::UnboundedReceiver<AgentEvent>, NanoError> {
-    let mut agent = Agent::new(config.clone()).build()?;
+    let mut agent = Agent::new(config.clone()).build().await?;
     agent.start().await?;
     let rx = agent.send_stream(message).await;
     // Note: the agent runs until all events are consumed.
