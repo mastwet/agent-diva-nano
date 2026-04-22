@@ -1,0 +1,489 @@
+//! Minimal TUI for agent-diva-nano
+
+use agent_diva_agent::{
+    agent_loop::SoulGovernanceSettings, context::SoulContextSettings,
+    runtime_control::RuntimeControlCommand, AgentLoop, ToolConfig,
+};
+use agent_diva_core::bus::{AgentEvent, MessageBus};
+use agent_diva_core::config::ConfigLoader;
+use agent_diva_core::cron::CronService;
+use agent_diva_providers::{
+    DynamicProvider, LiteLLMClient, ProviderAccess, ProviderCatalogService,
+    ProviderRegistry,
+};
+use anyhow::Result;
+use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+use crossterm::ExecutableCommand;
+use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::{backend::CrosstermBackend, Terminal};
+use std::io;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tracing::error;
+
+#[derive(Clone)]
+enum TimelineKind {
+    User,
+    Assistant,
+    Tool,
+    System,
+    Error,
+    Thinking,
+}
+
+#[derive(Clone)]
+struct TimelineItem {
+    kind: TimelineKind,
+    text: String,
+}
+
+struct TuiApp {
+    input: String,
+    timeline: Vec<TimelineItem>,
+    pending: bool,
+    should_quit: bool,
+    scroll: u16,
+    assistant_line: Option<usize>,
+    session_key: String,
+    model: String,
+}
+
+fn chat_id_from_tui_session(session_key: &str) -> String {
+    session_key.split(':').nth(2).unwrap_or("tui").to_string()
+}
+
+impl TuiApp {
+    fn new(session_key: String, model: String) -> Self {
+        Self {
+            input: String::new(),
+            timeline: vec![TimelineItem {
+                kind: TimelineKind::System,
+                text: "Welcome to Agent Diva Nano TUI. Enter to send, Shift+Enter for newline. /quit /clear /new".to_string(),
+            }],
+            pending: false,
+            should_quit: false,
+            scroll: 0,
+            assistant_line: None,
+            session_key,
+            model,
+        }
+    }
+
+    fn add_line(&mut self, kind: TimelineKind, text: impl Into<String>) {
+        self.timeline.push(TimelineItem {
+            kind,
+            text: text.into(),
+        });
+        self.scroll = self.scroll.saturating_add(1);
+    }
+
+    fn apply_agent_event(&mut self, event: AgentEvent) {
+        match event {
+            AgentEvent::IterationStarted {
+                index,
+                max_iterations,
+            } => {
+                self.assistant_line = None;
+                self.add_line(
+                    TimelineKind::System,
+                    format!("iteration {}/{}", index, max_iterations),
+                );
+            }
+            AgentEvent::AssistantDelta { text } => {
+                if text.is_empty() {
+                    return;
+                }
+                if let Some(idx) = self.assistant_line {
+                    if let Some(item) = self.timeline.get_mut(idx) {
+                        item.text.push_str(&text);
+                    }
+                } else {
+                    self.timeline.push(TimelineItem {
+                        kind: TimelineKind::Assistant,
+                        text,
+                    });
+                    self.assistant_line = Some(self.timeline.len() - 1);
+                }
+            }
+            AgentEvent::ReasoningDelta { text } => {
+                if text.is_empty() {
+                    return;
+                }
+                self.assistant_line = None;
+                if let Some(item) = self.timeline.last_mut() {
+                    if matches!(item.kind, TimelineKind::Thinking) {
+                        item.text.push_str(&text);
+                        return;
+                    }
+                }
+                self.add_line(TimelineKind::Thinking, text);
+            }
+            AgentEvent::ToolCallStarted {
+                name,
+                args_preview,
+                call_id,
+            } => {
+                self.assistant_line = None;
+                self.add_line(
+                    TimelineKind::Tool,
+                    format!("[tool:start] {} [{}] {}", name, call_id, args_preview),
+                );
+            }
+            AgentEvent::ToolCallFinished {
+                name,
+                result,
+                is_error,
+                call_id,
+            } => {
+                self.assistant_line = None;
+                let prefix = if is_error {
+                    "[tool:error]"
+                } else {
+                    "[tool:done]"
+                };
+                self.add_line(
+                    if is_error {
+                        TimelineKind::Error
+                    } else {
+                        TimelineKind::Tool
+                    },
+                    format!("{} {} [{}] {}", prefix, name, call_id, result),
+                );
+            }
+            AgentEvent::FinalResponse { .. } => {
+                self.pending = false;
+                self.assistant_line = None;
+            }
+            AgentEvent::Error { message } => {
+                self.pending = false;
+                self.assistant_line = None;
+                self.add_line(TimelineKind::Error, format!("error: {}", message));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn provider_registry() -> ProviderRegistry {
+    ProviderRegistry::new()
+}
+
+fn infer_provider_name_from_model(model: &str) -> Option<String> {
+    let registry = provider_registry();
+    model
+        .split('/')
+        .next()
+        .and_then(|prefix| registry.find_by_name(prefix))
+        .or_else(|| registry.find_by_model(model))
+        .map(|spec| spec.name.clone())
+}
+
+fn current_provider_name(config: &agent_diva_core::config::Config) -> Option<String> {
+    let preferred_provider = config
+        .agents
+        .defaults
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    preferred_provider.or_else(|| infer_provider_name_from_model(&config.agents.defaults.model))
+}
+
+fn resolve_provider_name_for_model(
+    config: &agent_diva_core::config::Config,
+    model: &str,
+    preferred_provider: Option<&str>,
+) -> Option<String> {
+    let inferred_provider = infer_provider_name_from_model(model);
+    if let Some(provider_name) = preferred_provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let registry = provider_registry();
+        if registry.find_by_name(provider_name).is_some() {
+            return Some(provider_name.to_string());
+        }
+        if inferred_provider.as_deref() == Some(provider_name) {
+            return inferred_provider;
+        }
+    }
+
+    inferred_provider.or_else(|| {
+        (model == config.agents.defaults.model)
+            .then(|| current_provider_name(config))
+            .flatten()
+    })
+}
+
+fn build_provider(config: &agent_diva_core::config::Config, model: &str) -> Result<LiteLLMClient> {
+    let catalog = ProviderCatalogService::new();
+    let provider_name = resolve_provider_name_for_model(
+        config,
+        model,
+        (model == config.agents.defaults.model)
+            .then_some(config.agents.defaults.provider.as_deref())
+            .flatten(),
+    )
+    .ok_or_else(|| anyhow::anyhow!("No provider found for model: {}", model))?;
+    let access = catalog
+        .get_provider_access(config, &provider_name)
+        .unwrap_or_else(|| ProviderAccess::from_config(None));
+    let extra_headers = (!access.extra_headers.is_empty()).then(|| {
+        access
+            .extra_headers
+            .into_iter()
+            .collect::<std::collections::HashMap<String, String>>()
+    });
+
+    Ok(LiteLLMClient::new(
+        access.api_key,
+        access.api_base,
+        model.to_string(),
+        extra_headers,
+        Some(provider_name),
+        config.agents.defaults.reasoning_effort.clone(),
+    ))
+}
+
+fn build_network_tool_config(
+    config: &agent_diva_core::config::Config,
+) -> agent_diva_agent::tool_config::network::NetworkToolConfig {
+    use agent_diva_agent::tool_config::network::{
+        NetworkToolConfig, WebFetchRuntimeConfig, WebRuntimeConfig, WebSearchRuntimeConfig,
+    };
+    let api_key = config.tools.web.search.api_key.trim().to_string();
+    NetworkToolConfig {
+        web: WebRuntimeConfig {
+            search: WebSearchRuntimeConfig {
+                provider: config.tools.web.search.provider.clone(),
+                enabled: config.tools.web.search.enabled,
+                api_key: if api_key.is_empty() {
+                    None
+                } else {
+                    Some(api_key)
+                },
+                max_results: config.tools.web.search.max_results,
+            },
+            fetch: WebFetchRuntimeConfig {
+                enabled: config.tools.web.fetch.enabled,
+            },
+        },
+    }
+}
+
+pub async fn run_tui(config_path: Option<PathBuf>) -> Result<()> {
+    let loader = if let Some(path) = config_path {
+        ConfigLoader::with_file(path)
+    } else {
+        ConfigLoader::new()
+    };
+
+    let config = loader.load()?;
+    let selected_model = config.agents.defaults.model.clone();
+    let workspace = std::env::current_dir()?;
+
+    let bus = MessageBus::new();
+    let provider = Arc::new(build_provider(&config, &selected_model)?);
+    let dynamic_provider = Arc::new(DynamicProvider::new(provider));
+
+    let tool_config = ToolConfig {
+        network: build_network_tool_config(&config),
+        exec_timeout: config.tools.exec.timeout,
+        restrict_to_workspace: config.tools.restrict_to_workspace,
+        mcp_servers: config.tools.active_mcp_servers(),
+        cron_service: Some(Arc::new(CronService::new(
+            loader.config_dir().join("cron_store.json"),
+            None,
+        ))),
+        soul_context: SoulContextSettings {
+            enabled: config.agents.soul.enabled,
+            max_chars: config.agents.soul.max_chars,
+            bootstrap_once: config.agents.soul.bootstrap_once,
+        },
+        notify_on_soul_change: config.agents.soul.notify_on_change,
+        soul_governance: SoulGovernanceSettings {
+            frequent_change_window_secs: config.agents.soul.frequent_change_window_secs,
+            frequent_change_threshold: config.agents.soul.frequent_change_threshold,
+            boundary_confirmation_hint: config.agents.soul.boundary_confirmation_hint,
+        },
+    };
+
+    let (runtime_control_tx, runtime_control_rx) = mpsc::unbounded_channel();
+    let mut agent = AgentLoop::with_tools(
+        bus,
+        dynamic_provider,
+        workspace,
+        Some(selected_model.clone()),
+        Some(config.agents.defaults.max_tool_iterations as usize),
+        tool_config,
+        Some(runtime_control_rx),
+    );
+
+    let current_session = "nano:tui".to_string();
+    let (request_tx, mut request_rx) = mpsc::unbounded_channel::<(String, String)>();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<AgentEvent>();
+
+    tokio::spawn(async move {
+        while let Some((prompt, session_key)) = request_rx.recv().await {
+            let chat_id = chat_id_from_tui_session(&session_key);
+            if let Err(e) = agent
+                .process_direct_stream(prompt, session_key, "nano", chat_id, event_tx.clone())
+                .await
+            {
+                error!("Agent process error: {}", e);
+            }
+        }
+    });
+
+    let mut stdout = io::stdout();
+    enable_raw_mode()?;
+    stdout.execute(EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = TuiApp::new(current_session, selected_model);
+
+    loop {
+        while let Ok(evt) = event_rx.try_recv() {
+            app.apply_agent_event(evt);
+        }
+
+        terminal.draw(|frame| {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Min(1),
+                    Constraint::Length(5),
+                ])
+                .split(frame.area());
+
+            let status = if app.pending { "processing" } else { "idle" };
+            let status_line = format!(
+                "model: {} | session: {} | status: {}",
+                app.model, app.session_key, status
+            );
+            frame.render_widget(
+                Paragraph::new(status_line).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("agent-diva-nano tui"),
+                ),
+                chunks[0],
+            );
+
+            let mut lines = Vec::new();
+            for item in &app.timeline {
+                let (label, color) = match item.kind {
+                    TimelineKind::User => ("user", Color::Cyan),
+                    TimelineKind::Assistant => ("assistant", Color::Green),
+                    TimelineKind::Tool => ("tool", Color::Yellow),
+                    TimelineKind::System => ("system", Color::Blue),
+                    TimelineKind::Error => ("error", Color::Red),
+                    TimelineKind::Thinking => ("thinking", Color::DarkGray),
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("[{}] ", label), Style::default().fg(color)),
+                    Span::raw(item.text.clone()),
+                ]));
+            }
+
+            let timeline = Paragraph::new(lines)
+                .block(Block::default().borders(Borders::ALL).title("timeline"))
+                .wrap(Wrap { trim: false })
+                .scroll((app.scroll, 0));
+            frame.render_widget(timeline, chunks[1]);
+
+            frame.render_widget(
+                Paragraph::new(app.input.clone())
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("input (Enter send, Shift+Enter newline)"),
+                    )
+                    .wrap(Wrap { trim: false }),
+                chunks[2],
+            );
+            frame.set_cursor_position((chunks[2].x + 1 + app.input.len() as u16, chunks[2].y + 1));
+        })?;
+
+        if event::poll(std::time::Duration::from_millis(60))? {
+            if let CEvent::Key(key) = event::read()? {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        app.should_quit = true;
+                    }
+                    KeyCode::Esc => app.should_quit = true,
+                    KeyCode::PageUp | KeyCode::Up => {
+                        app.scroll = app.scroll.saturating_sub(1);
+                    }
+                    KeyCode::PageDown | KeyCode::Down => {
+                        app.scroll = app.scroll.saturating_add(1);
+                    }
+                    KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                        app.input.push('\n');
+                    }
+                    KeyCode::Enter => {
+                        let content = app.input.trim().to_string();
+                        app.input.clear();
+                        if content.is_empty() {
+                            continue;
+                        }
+                        if content == "/quit" {
+                            app.should_quit = true;
+                        } else if content == "/clear" {
+                            app.timeline.clear();
+                            app.assistant_line = None;
+                        } else if content == "/new" {
+                            app.session_key =
+                                format!("nano:tui:{}", chrono::Local::now().format("%Y%m%d%H%M%S"));
+                            app.assistant_line = None;
+                            app.add_line(
+                                TimelineKind::System,
+                                format!("new session: {}", app.session_key),
+                            );
+                        } else if content == "/stop" {
+                            let chat_id = chat_id_from_tui_session(&app.session_key);
+                            let session_key = format!("nano:{}", chat_id);
+                            let _ = runtime_control_tx
+                                .send(RuntimeControlCommand::StopSession { session_key });
+                            app.add_line(TimelineKind::System, "stop requested");
+                        } else {
+                            app.add_line(TimelineKind::User, content.clone());
+                            app.pending = true;
+                            app.assistant_line = None;
+                            let _ = request_tx.send((content, app.session_key.clone()));
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        app.input.pop();
+                    }
+                    KeyCode::Char(ch) => {
+                        app.input.push(ch);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if app.should_quit {
+            break;
+        }
+    }
+
+    disable_raw_mode()?;
+    terminal.backend_mut().execute(LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}

@@ -1,0 +1,39 @@
+[package]
+name = "agent-diva-nano"
+version = "0.3.0"
+edition = "2021"
+authors = ["mastwet (projectViVY Team, undefine foundation)"]
+license = "MIT"
+repository = "https://github.com/ProjectViVy/agent-diva"
+description = "Minimal 'create an agent' library for Agent Diva"
+rust-version = "1.80.0"
+
+[features]
+default = []
+
+[dependencies]
+tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time"] }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+
+# Agent Diva internal crates
+agent-diva-core = "0.3.0"
+agent-diva-agent = "0.3.0"
+agent-diva-providers = "0.3.0"
+agent-diva-tools = "0.3.0"
+
+[dev-dependencies]
+tempfile = "3.10"
+ratatui = "0.28"
+crossterm = "0.28"
+chrono = "0.4"
+
+[[example]]
+name = "chat"
+path = "examples/chat.rs"
+
+[[example]]
+name = "tui"
+path = "examples/tui/main.rs"
