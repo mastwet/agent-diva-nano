@@ -1,11 +1,12 @@
 [package]
 name = "agent-diva-nano"
-version = "0.4.10"
+version = "0.4.11"
 edition = "2021"
 authors = ["mastwet (projectViVY Team, undefine foundation)"]
 license = "MIT"
 repository = "https://github.com/ProjectViVy/agent-diva"
 description = "Minimal 'create an agent' library for Agent Diva"
+readme = "README.md"
 rust-version = "1.80.0"
 
 [workspace]
@@ -24,13 +25,13 @@ async-trait = "0.1"
 futures = "0.3"
 uuid = { version = "1.0", features = ["v4"] }
 
-# Agent Diva internal crates
-agent-diva-core = { version = "0.4.9", path = "../../agent-diva-core" }
-agent-diva-agent = { version = "0.4.9", path = "../../agent-diva-agent" }
-agent-diva-providers = { version = "0.4.9", path = "../../agent-diva-providers" }
-agent-diva-tools = { version = "0.4.9", path = "../../agent-diva-tools" }
-agent-diva-tooling = { version = "0.4.9", path = "../../agent-diva-tooling" }
-agent-diva-files = { version = "0.4.9", path = "../../agent-diva-files", optional = true }
+# Agent Diva publishable crates
+agent-diva-core = "0.4.10"
+agent-diva-agent = "0.4.10"
+agent-diva-providers = "0.4.10"
+agent-diva-tools = "0.4.10"
+agent-diva-tooling = "0.4.10"
+agent-diva-files = { version = "0.4.10", optional = true }
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -45,3 +46,11 @@ path = "examples/chat.rs"
 [[example]]
 name = "tui"
 path = "examples/tui/main.rs"
+
+[patch.crates-io]
+agent-diva-core = { path = "../../agent-diva-core" }
+agent-diva-agent = { path = "../../agent-diva-agent" }
+agent-diva-providers = { path = "../../agent-diva-providers" }
+agent-diva-tools = { path = "../../agent-diva-tools" }
+agent-diva-tooling = { path = "../../agent-diva-tooling" }
+agent-diva-files = { path = "../../agent-diva-files" }

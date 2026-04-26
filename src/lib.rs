@@ -3,7 +3,7 @@
 //! Add to your project:
 //! ```toml
 //! [dependencies]
-//! agent-diva-nano = "0.3"
+//! agent-diva-nano = "0.4.11"
 //! tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 //! ```
 //!
@@ -15,8 +15,8 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let config = NanoConfig {
-//!     model: "deepseek-chat"to_string(),
-//!     api_key: std::env::var("API_KEY")?,
+//!     model: "deepseek-chat".to_string(),
+//!     api_key: std::env::var("NANO_API_KEY")?,
 //!     ..Default::default()
 //! };
 //!
@@ -36,8 +36,8 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let config = NanoConfig {
-//!     model: "deepseek-chat"to_string(),
-//!     api_key: std::env::var("API_KEY")?,
+//!     model: "deepseek-chat".to_string(),
+//!     api_key: std::env::var("NANO_API_KEY")?,
 //!     ..Default::default()
 //! };
 //!

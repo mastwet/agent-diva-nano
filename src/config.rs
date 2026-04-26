@@ -69,8 +69,8 @@ impl Default for SoulConfig {
 /// use std::path::PathBuf;
 ///
 /// let config = NanoConfig {
-///     model: "deepseek-chat"to_string(),
-///     api_key: std::env::var("API_KEY").unwrap(),
+///     model: "deepseek-chat".to_string(),
+///     api_key: std::env::var("NANO_API_KEY").unwrap(),
 ///     ..Default::default()
 /// };
 /// ```
