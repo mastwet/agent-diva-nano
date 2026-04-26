@@ -9,7 +9,7 @@ use agent_diva_core::session::SessionManager;
 #[cfg(feature = "files")]
 use agent_diva_files::FileManager;
 use agent_diva_providers::{LLMProvider, LLMStreamEvent, ProviderEventStream, ToolCallRequest};
-use agent_diva_tools::ToolRegistry;
+use agent_diva_tooling::ToolRegistry;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;

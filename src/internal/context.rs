@@ -3,7 +3,7 @@
 use agent_diva_core::bus::InboundMessage;
 use agent_diva_core::session::Session;
 use agent_diva_providers::Message;
-use agent_diva_tools::ToolRegistry;
+use agent_diva_tooling::ToolRegistry;
 use std::path::PathBuf;
 
 /// Soul settings for nano context.

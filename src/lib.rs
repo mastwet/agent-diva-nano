@@ -82,7 +82,10 @@ pub mod nano_loop;
 
 mod internal;
 
-pub use config::{NanoConfig, MCPServerConfig, SoulConfig, WebSearchConfig, BuiltInToolsConfig, ShellToolConfig, WebToolConfig};
+pub use config::{
+    BuiltInToolsConfig, MCPServerConfig, NanoConfig, ShellToolConfig, SoulConfig, WebSearchConfig,
+    WebToolConfig,
+};
 pub use agent::{Agent, AgentBuilder, AgentLoopMode};
 pub use chat::{chat, chat_stream};
 pub use error::NanoError;
@@ -90,7 +93,7 @@ pub use tool_assembly::{ToolAssembly, SubagentSpawner};
 pub use nano_loop::{NanoAgentLoop, NanoLoopConfig, NanoRuntimeControlCommand};
 
 /// Re-export tool types for custom tool creation.
-pub use agent_diva_tools::{Tool, ToolError, ToolRegistry};
+pub use agent_diva_tooling::{Tool, ToolError, ToolRegistry};
 
 /// Re-export core event types so consumers don't need to depend on `agent-diva-core`.
 pub use agent_diva_core::bus::AgentEvent;

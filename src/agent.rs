@@ -5,12 +5,12 @@ use crate::tool_assembly::{ToolAssembly, BuiltInToolsConfig};
 use crate::nano_loop::{NanoAgentLoop, NanoLoopConfig, NanoRuntimeControlCommand};
 use crate::internal::context::NanoSoulSettings;
 use crate::internal::provider::{build_provider, build_tool_config};
-use agent_diva_agent::AgentLoop;
+use agent_diva_agent::{AgentLoop, AgentLoopToolSet};
 use agent_diva_core::bus::{AgentEvent, InboundMessage, MessageBus};
 #[cfg(feature = "files")]
 use agent_diva_files::{FileManager, FileConfig};
 use agent_diva_providers::DynamicProvider;
-use agent_diva_tools::{Tool, ToolRegistry};
+use agent_diva_tooling::{Tool, ToolRegistry};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -92,23 +92,12 @@ impl Agent {
 
         match self.mode {
             AgentLoopMode::Standard => {
-                // Use agent-diva-agent's AgentLoop with ToolConfig
                 let tool_config = self.tool_config.clone().unwrap_or_default();
-                
-                // Build a ToolRegistry that includes custom tools
-                let mut registry = ToolRegistry::new();
-                for tool in self.tool_registry.iter() {
-                    // Clone each tool from the registry
-                    for name in tool.tool_names() {
-                        if let Some(t) = tool.get(&name) {
-                            registry.register(t);
-                        }
-                    }
-                }
-
-                // Note: AgentLoop::with_tools will add its own tools, so custom tools
-                // need to be passed via ToolConfig extension or a different approach.
-                // For now, we use the standard path with tool_config.
+                let registry = self
+                    .tool_registry
+                    .as_ref()
+                    .map(clone_registry)
+                    .unwrap_or_default();
                 
                 #[cfg(not(feature = "files"))]
                 {
@@ -117,13 +106,16 @@ impl Agent {
                 
                 #[cfg(feature = "files")]
                 {
-                    let mut agent_loop = AgentLoop::with_tools(
+                    let mut agent_loop = AgentLoop::with_toolset(
                         bus.clone(),
                         provider,
                         workspace,
                         Some(model),
                         Some(max_iterations),
-                        tool_config,
+                        AgentLoopToolSet {
+                            registry,
+                            config: tool_config,
+                        },
                         None, // No runtime control for standard mode (different type)
                         file_manager,
                     ).await.map_err(|e| NanoError::Other(e.to_string()))?;
@@ -139,20 +131,11 @@ impl Agent {
                 }
             }
             AgentLoopMode::Nano => {
-                // Use nano's lightweight NanoAgentLoop with ToolAssembly
-                let tool_registry = match &self.tool_registry {
-                    Some(reg) => {
-                        // Build a new registry with the same tools
-                        let mut new_registry = ToolRegistry::new();
-                        for name in reg.tool_names() {
-                            if let Some(tool) = reg.get(&name) {
-                                new_registry.register(tool);
-                            }
-                        }
-                        new_registry
-                    }
-                    None => ToolRegistry::new(),
-                };
+                let tool_registry = self
+                    .tool_registry
+                    .as_ref()
+                    .map(clone_registry)
+                    .unwrap_or_default();
                 let nano_config = self.nano_loop_config.clone().unwrap_or_default();
 
                 let mut nano_loop = NanoAgentLoop::new(
@@ -385,7 +368,7 @@ impl AgentBuilder {
     /// Note: Only effective in Nano mode. In Standard mode, use NanoConfig fields.
     pub fn with_tool_assembly(mut self, assembly: ToolAssembly) -> Self {
         self.tool_assembly = Some(assembly);
-        self.mode = AgentLoopMode::Nano;
+        self.mode = AgentLoopMode::Standard;
         self
     }
 
@@ -396,7 +379,7 @@ impl AgentBuilder {
         let assembly = ToolAssembly::new(workspace)
             .builtin(config);
         self.tool_assembly = Some(assembly);
-        self.mode = AgentLoopMode::Nano;
+        self.mode = AgentLoopMode::Standard;
         self
     }
 
@@ -434,14 +417,39 @@ impl AgentBuilder {
 
         match self.mode {
             AgentLoopMode::Standard => {
-                // Build ToolConfig from NanoConfig
                 let tool_config = build_tool_config(&config);
-                
-                // Build a ToolRegistry with custom tools
-                let mut tool_registry = ToolRegistry::new();
+                let mut assembly = if let Some(assembly) = self.tool_assembly {
+                    assembly
+                } else {
+                    let builtin_config = config
+                        .builtin_tools
+                        .clone()
+                        .unwrap_or_else(BuiltInToolsConfig::default);
+                    let mut assembly = ToolAssembly::new(workspace.clone())
+                        .builtin(builtin_config)
+                        .restrict_to_workspace(config.restrict_to_workspace);
+                    if let Some(ref search) = config.web_search {
+                        assembly = assembly.web_config(crate::tool_assembly::WebToolConfig {
+                            search_enabled: true,
+                            fetch_enabled: true,
+                            search_provider: search.provider.clone(),
+                            search_api_key: search.api_key.clone(),
+                            max_results: search.max_results,
+                        });
+                    }
+                    if !config.mcp_servers.is_empty() {
+                        assembly = assembly.mcp_servers(config.mcp_servers.clone());
+                    }
+                    assembly
+                };
                 for tool in self.custom_tools {
-                    tool_registry.register(tool);
+                    assembly = assembly.with_tool(tool);
                 }
+                #[cfg(feature = "files")]
+                {
+                    assembly = assembly.with_file_manager(file_manager.clone());
+                }
+                let tool_registry = assembly.build();
 
                 Ok(Agent {
                     bus,
@@ -461,11 +469,16 @@ impl AgentBuilder {
                 })
             }
             AgentLoopMode::Nano => {
-                // Build ToolAssembly or use provided one
-                let tool_registry = if let Some(assembly) = self.tool_assembly {
+                let tool_registry = if let Some(mut assembly) = self.tool_assembly {
+                    for tool in self.custom_tools {
+                        assembly = assembly.with_tool(tool);
+                    }
+                    #[cfg(feature = "files")]
+                    {
+                        assembly = assembly.with_file_manager(file_manager.clone());
+                    }
                     assembly.build()
                 } else {
-                    // Default assembly based on NanoConfig
                     let builtin_config = config.builtin_tools.clone()
                         .unwrap_or_else(|| {
                             if config.restrict_to_workspace {
@@ -478,15 +491,26 @@ impl AgentBuilder {
                     let mut assembly = ToolAssembly::new(workspace.clone())
                         .builtin(builtin_config)
                         .restrict_to_workspace(config.restrict_to_workspace);
+                    if let Some(ref search) = config.web_search {
+                        assembly = assembly.web_config(crate::tool_assembly::WebToolConfig {
+                            search_enabled: true,
+                            fetch_enabled: true,
+                            search_provider: search.provider.clone(),
+                            search_api_key: search.api_key.clone(),
+                            max_results: search.max_results,
+                        });
+                    }
 
-                    // Add custom tools
                     for tool in self.custom_tools {
                         assembly = assembly.with_tool(tool);
                     }
 
-                    // Add MCP servers
                     if !config.mcp_servers.is_empty() {
                         assembly = assembly.mcp_servers(config.mcp_servers.clone());
+                    }
+                    #[cfg(feature = "files")]
+                    {
+                        assembly = assembly.with_file_manager(file_manager.clone());
                     }
 
                     assembly.build()
@@ -523,4 +547,14 @@ impl AgentBuilder {
             }
         }
     }
+}
+
+fn clone_registry(registry: &ToolRegistry) -> ToolRegistry {
+    let mut cloned = ToolRegistry::new();
+    for name in registry.tool_names() {
+        if let Some(tool) = registry.get(&name) {
+            cloned.register(tool);
+        }
+    }
+    cloned
 }

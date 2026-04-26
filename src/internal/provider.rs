@@ -1,5 +1,6 @@
 use crate::{NanoConfig, NanoError};
 use agent_diva_agent::{
+    BuiltInToolsConfig,
     tool_config::network::{
         NetworkToolConfig, WebFetchRuntimeConfig, WebRuntimeConfig, WebSearchRuntimeConfig,
     },
@@ -64,6 +65,10 @@ pub fn build_tool_config(config: &NanoConfig) -> ToolConfig {
     };
 
     ToolConfig {
+        builtin: config
+            .builtin_tools
+            .clone()
+            .unwrap_or_else(BuiltInToolsConfig::default),
         network,
         exec_timeout: config.exec_timeout,
         restrict_to_workspace: config.restrict_to_workspace,
